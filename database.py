@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client, ClientOptions
+import time
+from functools import wraps
 
 load_dotenv()
 
@@ -22,6 +24,24 @@ TTL = {
     "funding":   None,  # Permanent — funding is a historical fact
     "ai":        7,     # AI Brain verdict (driven by job TTL)
 }
+
+def db_retry(max_retries=3, delay=2):
+    """Decorator to retry database operations on transient errors."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_err = None
+            for i in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_err = e
+                    # Common Render/Supabase transient errors: connection timeouts, 502, 503
+                    print(f"  [DB RETRY] Attempt {i+1}/{max_retries} failed for '{func.__name__}': {e}")
+                    time.sleep(delay * (2 ** i))
+            raise last_err
+        return wrapper
+    return decorator
 
 
 def _now() -> datetime:
@@ -50,6 +70,7 @@ def get_client() -> Client:
 # PIPELINE RUNS
 # ─────────────────────────────────────────
 
+@db_retry()
 def start_pipeline_run(db: Client, geographies: list[str], sources: list[str]) -> str:
     """Creates a new pipeline_run row. Returns the run UUID."""
     result = db.table("pipeline_runs").insert({
@@ -62,6 +83,7 @@ def start_pipeline_run(db: Client, geographies: list[str], sources: list[str]) -
     return run_id
 
 
+@db_retry()
 def finish_pipeline_run(db: Client, run_id: str, stats: dict):
     """Updates the pipeline_run row with final stats."""
     db.table("pipeline_runs").update({
@@ -123,6 +145,7 @@ def normalize_location(locations: list) -> dict:
     }
 
 
+@db_retry()
 def bulk_upsert_companies(db: Client, companies: list[dict], run_id: str) -> dict[str, str]:
     """
     Bulk upsert companies. Returns name_normalized -> company_id map.
@@ -229,6 +252,7 @@ def bulk_upsert_companies(db: Client, companies: list[dict], run_id: str) -> dic
 
     return company_id_map
 
+@db_retry()
 def bulk_update_enrichment(db: Client, companies: list[dict]) -> int:
     """
     Writes back enriched data (URL, description, team_size, industries) to the companies table.
@@ -437,6 +461,7 @@ def log_raw_scrape(db: Client, company: dict, run_id: str, country_code: str = N
     db.table("raw_scrape_events").insert(_raw_scrape_row(company, run_id, country_code)).execute()
 
 
+@db_retry()
 def log_raw_scrape_bulk(db: Client, companies: list[dict], run_id: str) -> None:
     """Bulk insert raw scrape events. Much faster than one-by-one."""
     BATCH_SIZE = 100
@@ -529,6 +554,7 @@ def bulk_token_lookup(db: Client, name_list: list[str]) -> dict:
 # JOB CACHE
 # ─────────────────────────────────────────
 
+@db_retry()
 def log_job_check(db: Client, company_id: str, run_id: str, result: dict, country_code: str = None):
     """Stores a job check result. TTL: 7 days."""
     # The job checker uses 'source' key (e.g. "Greenhouse", "Lever"), not 'method'
@@ -562,6 +588,7 @@ def log_job_check(db: Client, company_id: str, run_id: str, result: dict, countr
 # SIGNAL CACHE
 # ─────────────────────────────────────────
 
+@db_retry()
 def log_signal(db: Client, company_id: str, run_id: str, signal_num: int,
                signal_name: str, passed: bool, score: int, max_score: int,
                evidence: str, raw_llm: dict = None, ttl_days: int = 7):
@@ -584,6 +611,7 @@ def log_signal(db: Client, company_id: str, run_id: str, signal_num: int,
 # AI RESULTS
 # ─────────────────────────────────────────
 
+@db_retry()
 def log_ai_result(db: Client, company_id: str, run_id: str, result: dict):
     """Stores the full AI Brain evaluation result."""
     signals = result.get("signal_results", [])
@@ -630,6 +658,7 @@ def get_active_leads(db: Client, country_code: str = None) -> list[dict]:
     return query.execute().data or []
 
 
+@db_retry()
 def bulk_fetch_cached_ai_results(db: Client, company_ids: list[str]) -> dict:
     """
     Fetches the most recent raw_ai_results row for each company_id.

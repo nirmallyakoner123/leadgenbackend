@@ -428,12 +428,18 @@ async def get_token_cache(
 
 
 # ── Pipeline Runner Stream (SSE) ───────────────────────────────────────────────
+pipeline_lock = asyncio.Lock()
+PIPELINE_RUNNING = False
+
 class QueueWriter:
     def __init__(self, q: queue.Queue):
         self.q = q
     def write(self, text):
-        if text.strip():
-            self.q.put(text)
+        if text and text.strip():
+            # Add a timestamp for better UX
+            from datetime import datetime
+            ts = datetime.now().strftime("%H:%M:%S")
+            self.q.put(f"[{ts}] {text.strip()}")
     def flush(self):
         pass
 
@@ -442,21 +448,32 @@ async def stream_pipeline(
     region: str = Query("US", description="Geography to run: US, GB, AU, VN")
 ):
     """
-    Executes the main pipeline synchronously in a background thread, 
-    but intercepts `print()` statements to stream standard output 
-    as Server-Sent Events (SSE) back to the client.
+    Executes the main pipeline. 
+    Uses a global lock to prevent concurrent runs (resource safety).
+    Intercepts prints to stream logs via SSE.
     """
+    global PIPELINE_RUNNING
+    
+    if PIPELINE_RUNNING:
+        raise HTTPException(
+            status_code=409, 
+            detail="A pipeline is already running. Please wait for it to complete."
+        )
+
     q = queue.Queue()
 
     def run_wrapper():
-        # Locally import to avoid circular dependencies if any
+        global PIPELINE_RUNNING
         from config import RunConfig
         from main import main as run_pipeline
 
+        PIPELINE_RUNNING = True
         old_stdout = sys.stdout
         sys.stdout = QueueWriter(q)
+        
         try:
             r = region.upper()
+            print(f"🚀 Starting Priority Pipeline for region: {r}")
             config = RunConfig(
                 geographies=[r],
                 use_yc=True,
@@ -465,33 +482,40 @@ async def stream_pipeline(
                 use_linkedin=True,
                 use_seek=(r == "AU"),
                 use_reed=(r == "GB"),
-                use_naukri=False,   # Explicitly disabled IN
                 max_companies_for_ai=200,
-                pipeline_version="v3",
+                pipeline_version="v3_stream",
             )
             run_pipeline(config)
+            print("✅ Pipeline execution finished successfully.")
         except Exception as e:
-            print(f"ERROR: {e}")
+            print(f"❌ ERROR: {e}")
         finally:
-            q.put(None)  # Sentinel value signaling end of stream
+            PIPELINE_RUNNING = False
             sys.stdout = old_stdout
+            q.put(None) # Sentinel
 
-    # Launch in a background thread so we don't block FastAPI's event loop
+    # Run in background via executor
     asyncio.get_running_loop().run_in_executor(None, run_wrapper)
 
     async def log_generator():
+        import time
+        last_heartbeat = time.time()
         while True:
             try:
                 # get_nowait is non-blocking
                 msg = q.get_nowait()
                 if msg is None:
-                    yield "event: close\ndata: Pipeline completed.\n\n"
+                    yield "data: [DONE] Pipeline finished.\n\n"
                     break
-                # Replace actual newlines within messages so we don't break SSE protocol
-                safe_msg = msg.replace("\n", " ")
-                yield f"data: {safe_msg}\n\n"
+                yield f"data: {msg}\n\n"
+                last_heartbeat = time.time()
             except queue.Empty:
-                await asyncio.sleep(0.1)
+                # If no logs for 15 seconds, send a keep-alive heartbeat
+                # Render/Cloudflare might close the connection after 100s of inactivity
+                if time.time() - last_heartbeat > 15:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = time.time()
+                await asyncio.sleep(0.5)
 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
 

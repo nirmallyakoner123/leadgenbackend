@@ -26,8 +26,8 @@ HEADERS = {
 }
 
 # Concurrency and retry settings
-# Lower concurrency avoids 429/403 from LinkedIn, Seek, YC; still faster than sequential
-MAX_CONCURRENT = 5
+# Lower concurrency avoids 429/403 and prevents OOM crashes on Render (1GB/512MB RAM)
+MAX_CONCURRENT = 3
 MAX_CONCURRENT_STRICT = 2   # LinkedIn, Seek — throttle to avoid rate limits
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_BASE = 1.0    # 1s, 2s, 4s for network errors
