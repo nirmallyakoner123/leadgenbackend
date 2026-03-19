@@ -845,7 +845,7 @@ def check_jobs_for_company(company: dict, current_idx: int = 1, total_count: int
     if not company.get("website") and website:
         company["website"] = website
 
-    time.sleep(random.uniform(0.2, 0.5))
+    time.sleep(random.uniform(0.5, 1.5))  # Heavier delay between companies to spread load on Render
     return company
 
 

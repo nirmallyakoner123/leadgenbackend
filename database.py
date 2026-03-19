@@ -328,29 +328,35 @@ def bulk_update_enrichment(db: Client, companies: list[dict]) -> int:
         print(f"  [DB] Enrichment writeback: nothing new to write", flush=True)
         return 0
 
-    print(f"  [DB] Writing enrichment updates for {len(updates_to_write)} companies (individual UPDATE calls)...", flush=True)
+    print(f"  [DB] Writing enrichment updates for {len(updates_to_write)} companies (concurrent UPDATE calls)...", flush=True)
     # Use individual UPDATEs instead of batch UPSERT to avoid row-level lock deadlocks.
     # UPSERT with on_conflict='id' can deadlock when many rows exist — UPDATE by PK never does.
     CHUNK_TIMEOUT = 45  # seconds per individual UPDATE before we skip it
     updated = 0
     skipped_timeout = 0
-    for i, row in enumerate(updates_to_write):
-        cid = row["_id"]
-        fields_only = {k: v for k, v in row.items() if k != "_id"}
-        if (i + 1) % 25 == 0 or (i + 1) == len(updates_to_write):
-            print(f"  [DB] UPDATE progress: {i+1}/{len(updates_to_write)}", flush=True)
-        def _do_update(db=db, cid=cid, fields_only=fields_only):
-            db.table("companies").update(fields_only).eq("id", cid).execute()
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_do_update)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {}
+        for row in updates_to_write:
+            cid = row["_id"]
+            fields_only = {k: v for k, v in row.items() if k != "_id"}
+            def _do_update(cid=cid, f=fields_only):
+                db.table("companies").update(f).eq("id", cid).execute()
+            futures[ex.submit(_do_update)] = cid
+
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            cid = futures[future]
+            try:
                 future.result(timeout=CHUNK_TIMEOUT)
-            updated += 1
-        except concurrent.futures.TimeoutError:
-            skipped_timeout += 1
-            print(f"  [DB] UPDATE timeout after {CHUNK_TIMEOUT}s for company {cid} — skipping", flush=True)
-        except Exception as e:
-            print(f"  [DB] UPDATE error for id={cid}: {e}", flush=True)
+                updated += 1
+            except concurrent.futures.TimeoutError:
+                skipped_timeout += 1
+                print(f"  [DB] UPDATE timeout after {CHUNK_TIMEOUT}s for company {cid} — skipping", flush=True)
+            except Exception as e:
+                print(f"  [DB] UPDATE error for id={cid}: {e}", flush=True)
+
+            if (i + 1) % 50 == 0 or (i + 1) == len(updates_to_write):
+                print(f"  [DB] UPDATE progress: {i+1}/{len(updates_to_write)}", flush=True)
 
     if skipped_timeout:
         print(f"  [DB] {skipped_timeout} updates skipped due to timeout — pipeline continues", flush=True)

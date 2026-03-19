@@ -193,8 +193,8 @@ class RunConfig:
     min_score_for_output: int = 4      # Only output leads scoring above this
 
     # Concurrency control — how many companies to process simultaneously
-    enricher_concurrency: int = 5      # Homepage fetches — low to avoid thread accumulation hang
-    job_checker_concurrency: int = 20  # ATS API waterfalls (heavier)
+    enricher_concurrency: int = 3      # Homepage fetches — low to avoid OOM/Hangs
+    job_checker_concurrency: int = 5   # ATS API waterfalls (heavier)
 
     # Pipeline version tag (stored in pipeline_runs)
     pipeline_version: str = "v3"
