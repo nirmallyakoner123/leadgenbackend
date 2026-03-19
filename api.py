@@ -28,8 +28,12 @@ Docs:  http://localhost:8000/docs
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from typing import Optional
 import os
+import sys
+import queue
+import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -421,6 +425,75 @@ async def get_token_cache(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Pipeline Runner Stream (SSE) ───────────────────────────────────────────────
+class QueueWriter:
+    def __init__(self, q: queue.Queue):
+        self.q = q
+    def write(self, text):
+        if text.strip():
+            self.q.put(text)
+    def flush(self):
+        pass
+
+@app.get("/pipeline/stream", tags=["System"])
+async def stream_pipeline(
+    region: str = Query("US", description="Geography to run: US, GB, AU, VN")
+):
+    """
+    Executes the main pipeline synchronously in a background thread, 
+    but intercepts `print()` statements to stream standard output 
+    as Server-Sent Events (SSE) back to the client.
+    """
+    q = queue.Queue()
+
+    def run_wrapper():
+        # Locally import to avoid circular dependencies if any
+        from config import RunConfig
+        from main import main as run_pipeline
+
+        old_stdout = sys.stdout
+        sys.stdout = QueueWriter(q)
+        try:
+            r = region.upper()
+            config = RunConfig(
+                geographies=[r],
+                use_yc=True,
+                use_techcrunch=True,
+                use_google_news=True,
+                use_linkedin=True,
+                use_seek=(r == "AU"),
+                use_reed=(r == "GB"),
+                use_naukri=False,   # Explicitly disabled IN
+                max_companies_for_ai=200,
+                pipeline_version="v3",
+            )
+            run_pipeline(config)
+        except Exception as e:
+            print(f"ERROR: {e}")
+        finally:
+            q.put(None)  # Sentinel value signaling end of stream
+            sys.stdout = old_stdout
+
+    # Launch in a background thread so we don't block FastAPI's event loop
+    asyncio.get_running_loop().run_in_executor(None, run_wrapper)
+
+    async def log_generator():
+        while True:
+            try:
+                # get_nowait is non-blocking
+                msg = q.get_nowait()
+                if msg is None:
+                    yield "event: close\ndata: Pipeline completed.\n\n"
+                    break
+                # Replace actual newlines within messages so we don't break SSE protocol
+                safe_msg = msg.replace("\n", " ")
+                yield f"data: {safe_msg}\n\n"
+            except queue.Empty:
+                await asyncio.sleep(0.1)
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
