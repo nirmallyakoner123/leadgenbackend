@@ -125,6 +125,7 @@ async def get_dashboard_stats():
 async def get_leads(
     page:      int           = Query(1,   ge=1),
     page_size: int           = Query(10,  ge=1, le=100),
+    search:    Optional[str] = Query(None, description="Partial company name match"),
     verdict:   Optional[str] = Query(None, description="HOT | WARM | COLD"),
     country:   Optional[str] = Query(None, description="Country code e.g. US, GB"),
 ):
@@ -143,6 +144,8 @@ async def get_leads(
             q = q.eq("verdict", verdict.upper())
         if country:
             q = q.eq("country_code", country.upper())
+        if search:
+            q = q.ilike("name_display", f"%{search}%")
 
         result = q.range(start, end).execute()
         leads  = result.data or []
@@ -220,6 +223,7 @@ async def get_companies(
 async def get_scrapes(
     page:      int           = Query(1,   ge=1),
     page_size: int           = Query(10,  ge=1, le=100),
+    search:    Optional[str] = Query(None, description="Partial company name match"),
     source:    Optional[str] = Query(None, description="Scrape source e.g. YC, LinkedIn"),
     country:   Optional[str] = Query(None),
 ):
@@ -240,6 +244,8 @@ async def get_scrapes(
             q = q.eq("source", source)
         if country:
             q = q.eq("country_code", country.upper())
+        if search:
+            q = q.ilike("company_name_raw", f"%{search}%")
 
         result = q.range(start, end).execute()
         return paged(result.data or [], result.count or 0, page, page_size)
@@ -369,6 +375,7 @@ async def get_pipeline_runs(
 async def get_token_cache(
     page:       int  = Query(1,   ge=1),
     page_size:  int  = Query(10,  ge=1, le=100),
+    search:     Optional[str] = Query(None, description="Partial company name match"),
     stale_only: bool = Query(False, description="Only companies with ≥1 stale token"),
 ):
     """
@@ -389,6 +396,8 @@ async def get_token_cache(
 
         if stale_only:
             q = q.or_("profile_needs_refresh.eq.true,job_needs_refresh.eq.true,ai_needs_refresh.eq.true")
+        if search:
+            q = q.ilike("name_normalized", f"%{search}%")
 
         result = q.range(start, end).execute()
 
