@@ -20,27 +20,65 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+# Structured for cold email: model should pick ONE pain + ONE benefit + one clear CTA.
+# If you export text from the product PDF/deck, paste the best lines into PRODUCT_CONTEXT_SOURCE.md
+# and mirror them here (keep this block the single source the prompt reads).
 PRODUCT_CONTEXT = """
-PRODUCT: InterviewScreener.com
+=== INTERVIEWSCREENER.COM — PRODUCT CONTEXT FOR OUTREACH (do not invent features not listed here) ===
 
-WHAT IT IS:
-An async AI screening tool. The recruiter adds a job, the system auto-generates role-specific interview questions, and candidates complete an audio interview with an AI agent — on their own time, no scheduling required. The hiring team receives a structured summary for each candidate.
+BRAND & URL
+- Name: InterviewScreener.com
+- URL (always mention as plain text in email body): InterviewScreener.com
+- Category: AI-assisted, async candidate screening (audio-first interviews + structured output for hiring teams)
 
-THE PROBLEM IT SOLVES:
-Most hiring teams waste hours on early-stage phone screens — scheduling them, conducting them, and writing up notes — only to filter out 70-80% of candidates anyway. This bottleneck slows down pipelines and burns recruiter time before a single qualified candidate is identified.
+ONE-LINE POSITIONING
+- Let candidates complete a structured, role-relevant screening conversation by voice, on their own time; hiring teams get consistent summaries before live interviews.
 
-THE BEFORE/AFTER:
-- Before: Recruiter manually schedules and conducts 10-20 phone screens per role, takes notes, tries to compare candidates consistently.
-- After: Candidates self-screen async via AI audio interview. Recruiter reviews structured summaries and only speaks to people worth their time.
+WHO USES IT
+- Primary: Talent acquisition, recruiters, HR / people ops running high-volume or multi-role hiring.
+- Secondary: Hiring managers who want a fair first pass without burning calendar on every applicant.
+- Candidates: Self-serve async interview (no live scheduling for the screening step).
 
-WHO IT'S FOR:
-Hiring managers, HR leads, and talent acquisition teams at companies actively recruiting — especially those with multiple open roles or high applicant volume.
+HOW IT WORKS (4 steps — use at most ONE short phrase from this in an email; never list all four)
+1. Hiring team adds / defines the job in the product.
+2. System generates relevant, job-specific interview questions (not a one-size-fits-all form).
+3. Candidate completes an AI-guided audio interview asynchronously.
+4. Team receives structured summaries to compare candidates and decide who moves forward.
 
-KEY DIFFERENTIATORS:
-1. No scheduling friction — candidates interview on their own schedule, 24/7.
-2. Consistent evaluation — every candidate answers the same structured questions, reducing interviewer bias.
-3. Time savings before live interviews — teams only commit calendar time to candidates who pass the async screen.
-4. Role-specific questions — auto-generated per job, not a generic questionnaire.
+PROBLEMS IT ADDRESSES (pick ONE pain that best matches the lead — do not stack)
+- Early phone screens and intro calls consume huge calendar time across many applicants.
+- Hard to keep first-round evaluation consistent across interviewers and time zones.
+- Scheduling back-and-forth and no-shows slow the funnel.
+- Notes and impressions vary by person; hard to compare candidates fairly on the same bar.
+- Teams with many open roles struggle to give every applicant a timely first touch.
+
+OUTCOMES & BENEFITS (pick ONE; no fabricated metrics)
+- Frees live interview time for candidates who already cleared a structured screen.
+- Same question set and format for every candidate = easier comparison.
+- Candidates progress without waiting for a recruiter slot.
+- Hiring team reviews written/audio-derived summaries instead of relying on memory.
+- Scales better when applicant volume or role count goes up.
+
+DIFFERENTIATORS (mention at most one in a single sentence)
+- Audio / voice screening (not only text forms or chatbots).
+- Questions tied to the specific job, not generic screening templates.
+- Async by design — built for volume and scheduling friction, not replacing final human interviews.
+- Output is structured for hiring decisions (summaries), not just a recording dump.
+
+WHAT THIS IS NOT (avoid implying these in cold email)
+- Not a replacement for full final-round or culture-fit interviews with the team.
+- Not a promise to "automate hiring end-to-end" or remove human judgment.
+- Do not claim legal compliance, bias elimination, or guaranteed hire quality.
+
+VOICE & CLAIMS FOR EMAILS
+- Tone: practical, peer-level, recruiting ops — not hype, not "AI revolution" language.
+- Forbidden words/phrases in the email: revolutionary, game-changer, cutting-edge, guaranteed, 10x, replace your recruiters.
+- Do not cite percentages, customer counts, or ROI unless provided in lead data — never invent.
+
+OPTIONAL PHRASES (paraphrase; do not use more than one)
+- "Structured audio screen before you block calendar."
+- "Same bar for every candidate on the first pass."
+- "They interview when it works for them; you get summaries when it works for you."
 """
 
 
