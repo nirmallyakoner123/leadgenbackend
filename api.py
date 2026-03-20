@@ -520,6 +520,450 @@ async def stream_pipeline(
     return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# OUTREACH ENDPOINTS — Apollo.io + Email Drafting + Sending
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Top Leads for Outreach ────────────────────────────────────────────────────
+@app.get("/outreach/top-leads", tags=["Outreach"])
+async def get_outreach_top_leads(
+    min_score: int = Query(10, ge=1, le=18, description="Minimum lead score"),
+    limit:     int = Query(50, ge=1, le=200, description="Max leads to return"),
+):
+    """
+    Get top active leads scored ≥ min_score, enriched with AI signal data.
+    These are the leads you'd want to outreach to.
+    """
+    try:
+        db = get_db()
+        from database import bulk_fetch_cached_ai_results
+
+        result = db.table("active_leads").select(
+            "*", count="exact"
+        ).gte(
+            "final_score", min_score
+        ).order(
+            "final_score", desc=True
+        ).limit(limit).execute()
+
+        leads = result.data or []
+        if not leads:
+            return {"data": [], "total": 0}
+
+        company_ids = [l["id"] for l in leads]
+
+        # Enrich with industries
+        comp_r = db.table("companies").select(
+            "id, industries, description, funding_amount"
+        ).in_("id", company_ids).execute()
+        company_map = {c["id"]: c for c in (comp_r.data or [])}
+
+        # Enrich with AI data
+        ai_map = bulk_fetch_cached_ai_results(db, company_ids)
+
+        # Check which already have contacts found
+        contacts_r = db.table("outreach_contacts").select(
+            "company_id", count="exact"
+        ).in_("company_id", company_ids).execute()
+        contacted_ids = set(c["company_id"] for c in (contacts_r.data or []))
+
+        formatted = []
+        for lead in leads:
+            cid = lead["id"]
+            ai_data = ai_map.get(cid, {})
+            comp = company_map.get(cid, {})
+            industries = comp.get("industries") or []
+
+            formatted.append({
+                "id":               cid,
+                "name_display":     lead.get("name_display", "Unknown"),
+                "website":          lead.get("website", ""),
+                "verdict":          lead.get("verdict", "COLD"),
+                "final_score":      lead.get("final_score", 0),
+                "team_size":        lead.get("team_size"),
+                "country_code":     lead.get("country_code", ""),
+                "city":             lead.get("city", ""),
+                "industry":         industries[0] if industries else "Unknown",
+                "description":      comp.get("description", "")[:200],
+                "funding_amount":   comp.get("funding_amount", ""),
+                "why_they_fit":     ai_data.get("why_they_fit", ""),
+                "outreach_opener":  ai_data.get("outreach_opener", ""),
+                "recommended_plan": ai_data.get("recommended_plan", ""),
+                "signal_results":   ai_data.get("signal_results", []),
+                "has_contacts":     cid in contacted_ids,
+            })
+
+        return {"data": formatted, "total": len(formatted)}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Manual Contact Input ──────────────────────────────────────────────────────
+@app.post("/outreach/add-contacts", tags=["Outreach"])
+async def add_contacts(body: dict):
+    """
+    Manually add contacts found from Apollo's web UI (or any source).
+    User copies contact info from Apollo and pastes it here.
+
+    Request body: {
+      "company_id": "uuid",   // required — which lead this contact belongs to
+      "contacts": [
+        {
+          "full_name": "Jane Smith",
+          "title": "Head of Talent Acquisition",
+          "email": "jane@company.com",
+          "email_status": "verified",       // optional, default "verified"
+          "linkedin_url": "https://...",    // optional
+          "seniority": "director",          // optional
+          "phone": "+1...",                 // optional
+        },
+        ...
+      ]
+    }
+    """
+    try:
+        company_id = body.get("company_id")
+        contacts_list = body.get("contacts", [])
+
+        if not company_id:
+            raise HTTPException(status_code=400, detail="company_id is required")
+        if not contacts_list:
+            raise HTTPException(status_code=400, detail="contacts list is required")
+        if len(contacts_list) > 20:
+            raise HTTPException(status_code=400, detail="Max 20 contacts per batch")
+
+        db = get_db()
+
+        # Verify company exists
+        comp_r = db.table("companies").select("id, name_display").eq("id", company_id).execute()
+        if not comp_r.data:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        saved_count = 0
+        for contact in contacts_list:
+            email = contact.get("email", "").strip()
+            full_name = contact.get("full_name", "").strip()
+            if not email or not full_name:
+                continue  # skip entries without email or name
+
+            db.table("outreach_contacts").insert({
+                "company_id":       company_id,
+                "apollo_person_id": "",
+                "full_name":        full_name,
+                "title":            contact.get("title", ""),
+                "email":            email,
+                "email_status":     contact.get("email_status", "verified"),
+                "linkedin_url":     contact.get("linkedin_url", ""),
+                "seniority":        contact.get("seniority", ""),
+                "departments":      contact.get("departments", []),
+                "phone":            contact.get("phone", ""),
+            }).execute()
+            saved_count += 1
+
+        company_name = comp_r.data[0].get("name_display", "Unknown")
+        return {
+            "message": f"Added {saved_count} contacts for {company_name}",
+            "contacts_saved": saved_count,
+            "company_name": company_name,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── List Contacts ─────────────────────────────────────────────────────────────
+@app.get("/outreach/contacts", tags=["Outreach"])
+async def list_contacts(
+    page:         int           = Query(1, ge=1),
+    page_size:    int           = Query(25, ge=1, le=100),
+    company_id:   Optional[str] = Query(None),
+    email_status: Optional[str] = Query(None, description="verified | guessed"),
+):
+    """List all found contacts with their company info."""
+    try:
+        db = get_db()
+        start, end = supabase_range(page, page_size)
+
+        q = db.table("outreach_contacts").select(
+            "*, companies(name_display, website)",
+            count="exact"
+        ).order("fetched_at", desc=True)
+
+        if company_id:
+            q = q.eq("company_id", company_id)
+        if email_status:
+            q = q.eq("email_status", email_status)
+
+        result = q.range(start, end).execute()
+
+        rows = []
+        for r in (result.data or []):
+            company = r.pop("companies", {}) or {}
+            rows.append({
+                **r,
+                "company_name": company.get("name_display", ""),
+                "company_website": company.get("website", ""),
+            })
+
+        return paged(rows, result.count or 0, page, page_size)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Draft Emails ──────────────────────────────────────────────────────────────
+@app.post("/outreach/draft-emails", tags=["Outreach"])
+async def draft_emails(body: dict):
+    """
+    Trigger AI email drafting for selected contacts.
+
+    Request body: { "contact_ids": ["uuid1", "uuid2", ...] }
+    """
+    try:
+        contact_ids = body.get("contact_ids", [])
+        if not contact_ids:
+            raise HTTPException(status_code=400, detail="contact_ids required")
+        if len(contact_ids) > 50:
+            raise HTTPException(status_code=400, detail="Max 50 contacts per batch")
+
+        db = get_db()
+        from database import bulk_fetch_cached_ai_results
+        from email_drafter import draft_batch
+
+        # Fetch contacts
+        contacts_r = db.table("outreach_contacts").select("*").in_("id", contact_ids).execute()
+        contacts = contacts_r.data or []
+
+        if not contacts:
+            raise HTTPException(status_code=404, detail="No contacts found")
+
+        # Gather company IDs
+        company_ids = list(set(c["company_id"] for c in contacts))
+
+        # Fetch companies
+        comp_r = db.table("companies").select(
+            "id, name_display, website, description, team_size, industries, country_code, city, funding_amount"
+        ).in_("id", company_ids).execute()
+        company_map = {c["id"]: c for c in (comp_r.data or [])}
+
+        # Fetch AI data
+        ai_map = bulk_fetch_cached_ai_results(db, company_ids)
+
+        # Build draft input
+        draft_input = []
+        for contact in contacts:
+            cid = contact["company_id"]
+            draft_input.append({
+                "contact": contact,
+                "company": company_map.get(cid, {}),
+                "ai_data": ai_map.get(cid, {}),
+                "contact_id": contact["id"],
+                "company_id": cid,
+            })
+
+        # Run drafting in background
+        drafts = await asyncio.get_running_loop().run_in_executor(
+            None, draft_batch, draft_input
+        )
+
+        # Save drafts to DB
+        saved_count = 0
+        for draft in drafts:
+            if draft.get("subject") and draft.get("body"):
+                db.table("outreach_emails").insert({
+                    "contact_id": draft["contact_id"],
+                    "company_id": draft["company_id"],
+                    "subject":    draft["subject"],
+                    "body":       draft["body"],
+                    "status":     "draft",
+                }).execute()
+                saved_count += 1
+
+        return {
+            "message": f"Drafted {saved_count} emails",
+            "drafts_created": saved_count,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── List Emails ───────────────────────────────────────────────────────────────
+@app.get("/outreach/emails", tags=["Outreach"])
+async def list_emails(
+    page:      int           = Query(1, ge=1),
+    page_size: int           = Query(25, ge=1, le=100),
+    status:    Optional[str] = Query(None, description="draft | approved | sent | rejected"),
+):
+    """List all email drafts with contact and company info."""
+    try:
+        db = get_db()
+        start, end = supabase_range(page, page_size)
+
+        q = db.table("outreach_emails").select(
+            "*, outreach_contacts(full_name, title, email), companies(name_display)",
+            count="exact"
+        ).order("created_at", desc=True)
+
+        if status:
+            q = q.eq("status", status)
+
+        result = q.range(start, end).execute()
+
+        rows = []
+        for r in (result.data or []):
+            contact = r.pop("outreach_contacts", {}) or {}
+            company = r.pop("companies", {}) or {}
+            rows.append({
+                **r,
+                "contact_name":   contact.get("full_name", ""),
+                "contact_title":  contact.get("title", ""),
+                "contact_email":  contact.get("email", ""),
+                "company_name":   company.get("name_display", ""),
+            })
+
+        return paged(rows, result.count or 0, page, page_size)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Approve / Reject / Edit Email ─────────────────────────────────────────────
+@app.put("/outreach/emails/{email_id}", tags=["Outreach"])
+async def update_email(email_id: str, body: dict):
+    """
+    Update an email draft: approve, reject, or edit.
+
+    Request body:
+      { "action": "approve" | "reject", "edited_subject": "...", "edited_body": "..." }
+    """
+    try:
+        action = body.get("action", "")
+        if action not in ("approve", "reject"):
+            raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+
+        db = get_db()
+
+        updates = {
+            "status": "approved" if action == "approve" else "rejected",
+        }
+
+        # Allow inline editing when approving
+        if action == "approve":
+            if body.get("edited_subject"):
+                updates["edited_subject"] = body["edited_subject"]
+            if body.get("edited_body"):
+                updates["edited_body"] = body["edited_body"]
+
+        db.table("outreach_emails").update(updates).eq("id", email_id).execute()
+
+        return {"message": f"Email {action}d successfully", "email_id": email_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Send Approved Emails ──────────────────────────────────────────────────────
+@app.post("/outreach/send", tags=["Outreach"])
+async def send_approved_emails():
+    """
+    Send all emails with status='approved' via SMTP.
+    Updates status to 'sent' and records SMTP response.
+    """
+    try:
+        db = get_db()
+        from email_sender import send_email, is_configured
+        from datetime import datetime, timezone
+
+        if not is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL in .env"
+            )
+
+        # Fetch approved emails with contact info
+        result = db.table("outreach_emails").select(
+            "*, outreach_contacts(full_name, email)"
+        ).eq("status", "approved").execute()
+
+        emails = result.data or []
+        if not emails:
+            return {"message": "No approved emails to send", "sent": 0, "failed": 0}
+
+        sent = 0
+        failed = 0
+
+        for email_row in emails:
+            contact = email_row.get("outreach_contacts", {}) or {}
+            to_email = contact.get("email", "")
+
+            if not to_email:
+                failed += 1
+                continue
+
+            # Use edited version if available, otherwise original
+            subject = email_row.get("edited_subject") or email_row.get("subject", "")
+            body = email_row.get("edited_body") or email_row.get("body", "")
+
+            send_result = send_email(to_email, subject, body)
+
+            if send_result["success"]:
+                db.table("outreach_emails").update({
+                    "status": "sent",
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "smtp_response": send_result["message"],
+                }).eq("id", email_row["id"]).execute()
+                sent += 1
+            else:
+                db.table("outreach_emails").update({
+                    "smtp_response": send_result["message"],
+                }).eq("id", email_row["id"]).execute()
+                failed += 1
+
+        return {
+            "message": f"Sent {sent} emails, {failed} failed",
+            "sent": sent,
+            "failed": failed,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Outreach Stats ────────────────────────────────────────────────────────────
+@app.get("/outreach/stats", tags=["Outreach"])
+async def get_outreach_stats():
+    """Get summary stats for the outreach pipeline."""
+    try:
+        db = get_db()
+
+        contacts_r = db.table("outreach_contacts").select("id", count="exact").execute()
+        verified_r = db.table("outreach_contacts").select("id", count="exact").eq("email_status", "verified").execute()
+        drafts_r   = db.table("outreach_emails").select("id", count="exact").eq("status", "draft").execute()
+        approved_r = db.table("outreach_emails").select("id", count="exact").eq("status", "approved").execute()
+        sent_r     = db.table("outreach_emails").select("id", count="exact").eq("status", "sent").execute()
+
+        return {
+            "total_contacts":    contacts_r.count or 0,
+            "verified_contacts": verified_r.count or 0,
+            "drafts":            drafts_r.count   or 0,
+            "approved":          approved_r.count or 0,
+            "sent":              sent_r.count     or 0,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn

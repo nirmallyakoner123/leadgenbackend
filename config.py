@@ -222,3 +222,12 @@ INDEED_SEARCH_QUERIES = [
 
 INDEED_LOCATION = "United States"
 INDEED_BASE_URL = "https://www.indeed.com"
+
+# ─────────────────────────────────────────
+# OUTREACH CONFIG
+# Controls the email outreach pipeline
+# ─────────────────────────────────────────
+
+OUTREACH_MIN_SCORE = 10        # Only outreach to leads scoring ≥ this (HOT leads)
+MAX_CONTACTS_PER_COMPANY = 3   # Max decision-makers to find per company
+OUTREACH_TOP_N = 50            # Top N active leads to target
