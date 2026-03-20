@@ -69,6 +69,10 @@ def draft_email(contact: dict, company_data: dict, ai_data: dict) -> dict:
     plan = ai_data.get("recommended_plan", "Pro")
     score = ai_data.get("final_score", 0)
     
+    open_roles_count = ai_data.get("open_roles_count", 0)
+    open_roles_titles = ai_data.get("open_roles_titles", [])
+    open_roles_text = f"{open_roles_count} roles (e.g. {', '.join(open_roles_titles[:3])})" if open_roles_count else "Unknown"
+    
     prompt = f"""
 You are a world-class B2B cold email copywriter for InterviewScreener.com.
 
@@ -90,6 +94,8 @@ Description: {company_data.get('description', 'N/A')[:300]}
 Team Size: {company_data.get('team_size', 'Unknown')} employees
 Industries: {', '.join(company_data.get('industries', [])) or 'Unknown'}
 Country: {company_data.get('country_code', 'Unknown')}
+Funding: {company_data.get('funding_amount', 'Unknown')}
+Open Roles: {open_roles_text}
 Lead Score: {score}/18
 
 ═══════════════════════════════════════════════

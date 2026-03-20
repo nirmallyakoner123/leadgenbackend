@@ -703,15 +703,21 @@ def bulk_fetch_cached_ai_results(db: Client, company_ids: list[str]) -> dict:
             seen.add(cid)
             rows_by_company[cid] = row
 
-    # Fetch ats_board_url from most recent job check for these companies
+    # Fetch job data from most recent job check for these companies
     job_resp = db.table("raw_job_events").select(
-        "company_id, ats_board_url"
+        "company_id, ats_board_url, job_count, job_titles_raw"
     ).in_("company_id", company_ids).order("expires_at", desc=True).execute()
     job_ats_map: dict[str, str] = {}
+    job_data_map: dict[str, dict] = {}
     for jrow in (job_resp.data or []):
         cid = jrow["company_id"]
         if cid not in job_ats_map and jrow.get("ats_board_url"):
             job_ats_map[cid] = jrow["ats_board_url"]
+        if cid not in job_data_map:
+            job_data_map[cid] = {
+                "job_count": jrow.get("job_count", 0),
+                "job_titles_raw": jrow.get("job_titles_raw", [])
+            }
 
     _SIGNAL_DEFS = [
         ("active_hiring",  "active_hiring",  "Actively Hiring (job volume)",    "signal_1"),
@@ -765,6 +771,8 @@ def bulk_fetch_cached_ai_results(db: Client, company_ids: list[str]) -> dict:
             "outreach_opener": row.get("outreach_opener", ""),
             "data_confidence": row.get("data_confidence", "LOW"),
             "signal_results": signal_results,
+            "open_roles_count": job_data_map.get(cid, {}).get("job_count", 0),
+            "open_roles_titles": job_data_map.get(cid, {}).get("job_titles_raw", []),
             # Populate proof_urls with ats_board_url from most recent job check
             # company_url and yc_url are filled in by main.py after hydration
             "proof_urls": {

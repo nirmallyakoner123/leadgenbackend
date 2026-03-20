@@ -749,9 +749,7 @@ async def draft_emails(body: dict):
         company_ids = list(set(c["company_id"] for c in contacts))
 
         # Fetch companies
-        comp_r = db.table("companies").select(
-            "id, name_display, website, description, team_size, industries, country_code, city, funding_amount"
-        ).in_("id", company_ids).execute()
+        comp_r = db.table("companies").select("*").in_("id", company_ids).execute()
         company_map = {c["id"]: c for c in (comp_r.data or [])}
 
         # Fetch AI data
