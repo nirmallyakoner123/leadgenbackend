@@ -26,7 +26,7 @@ Start: uvicorn api:app --reload --port 8000
 Docs:  http://localhost:8000/docs
 """
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -35,9 +35,16 @@ import os
 import sys
 import queue
 import asyncio
+import logging
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from logging_setup import configure_app_logging
+
+configure_app_logging()
+log = logging.getLogger("leadgen.outreach")
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -57,6 +64,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _api_startup_log():
+    log.info(
+        "leadgen_api.startup | log_level_env=%s",
+        os.getenv("LOG_LEVEL", "INFO"),
+    )
+
 
 class ApolloPasteRequest(BaseModel):
     raw_text: str
@@ -734,6 +750,8 @@ async def draft_emails(body: dict):
         if len(contact_ids) > 50:
             raise HTTPException(status_code=400, detail="Max 50 contacts per batch")
 
+        log.info("draft_emails.request | contact_ids=%s", len(contact_ids))
+
         db = get_db()
         from database import bulk_fetch_cached_ai_results
         from email_drafter import draft_batch
@@ -785,6 +803,11 @@ async def draft_emails(body: dict):
                 }).execute()
                 saved_count += 1
 
+        log.info(
+            "draft_emails.complete | contacts_requested=%s drafts_saved=%s",
+            len(contact_ids),
+            saved_count,
+        )
         return {
             "message": f"Drafted {saved_count} emails",
             "drafts_created": saved_count,
@@ -865,6 +888,7 @@ async def update_email(email_id: str, body: dict):
 
         db.table("outreach_emails").update(updates).eq("id", email_id).execute()
 
+        log.info("email.status_update | email_id=%s action=%s", email_id, action)
         return {"message": f"Email {action}d successfully", "email_id": email_id}
 
     except HTTPException:
@@ -874,45 +898,72 @@ async def update_email(email_id: str, body: dict):
 
 
 # ── Send Single Approved Email ────────────────────────────────────────────────
-@app.post("/outreach/send-single/{email_id}", tags=["Outreach"])
-async def send_single_email(email_id: str):
+def _run_send_single_email(email_id: str) -> dict:
     """
-    Send a specific approved email via SMTP.
+    Fetch outreach row, send via SMTP, update Supabase.
+    Safe to call from a worker thread or FastAPI BackgroundTasks (sync → threadpool).
     """
+    from email_sender import send_email, is_configured
+    from datetime import datetime, timezone
+
+    t0 = time.perf_counter()
+    log.info("send_single.worker_start | email_id=%s", email_id)
+
     try:
-        db = get_db()
-        from email_sender import send_email, is_configured
-        from datetime import datetime, timezone
-
         if not is_configured():
-            raise HTTPException(
-                status_code=400,
-                detail="SMTP not configured."
-            )
+            log.warning("send_single.worker_abort | email_id=%s reason=smtp_not_configured", email_id)
+            return {"ok": False, "error": "smtp_not_configured", "message": "SMTP not configured."}
 
-        # Fetch the email with contact info
+        db = get_db()
         result = db.table("outreach_emails").select(
             "*, outreach_contacts(full_name, email)"
         ).eq("id", email_id).execute()
 
         if not result.data:
-            raise HTTPException(status_code=404, detail="Email not found")
-        
+            log.warning("send_single.worker_abort | email_id=%s reason=not_found", email_id)
+            return {"ok": False, "error": "not_found", "message": "Email not found"}
+
         email_row = result.data[0]
         if email_row["status"] == "sent":
-            return {"message": "Email already sent", "success": True}
+            log.info(
+                "send_single.worker_skip | email_id=%s reason=already_sent elapsed_ms=%.0f",
+                email_id,
+                (time.perf_counter() - t0) * 1000,
+            )
+            return {"ok": True, "already_sent": True, "message": "Email already sent", "success": True}
+
+        if email_row["status"] != "approved":
+            log.warning(
+                "send_single.worker_abort | email_id=%s reason=not_approved status=%s",
+                email_id,
+                email_row.get("status"),
+            )
+            return {
+                "ok": False,
+                "error": "not_approved",
+                "message": "Email must be approved before sending.",
+            }
 
         contact = email_row.get("outreach_contacts", {}) or {}
         to_email = contact.get("email", "")
-
+        full_name = contact.get("full_name", "")
         if not to_email:
-            raise HTTPException(status_code=400, detail="Contact email is missing")
+            log.warning("send_single.worker_abort | email_id=%s reason=no_recipient", email_id)
+            return {"ok": False, "error": "no_recipient", "message": "Contact email is missing"}
 
-        # Use edited version if available, otherwise original
         subject = email_row.get("edited_subject") or email_row.get("subject", "")
         body = email_row.get("edited_body") or email_row.get("body", "")
 
+        log.info(
+            "send_single.smtp_invoke | email_id=%s to=%s contact=%s subject_preview=%s",
+            email_id,
+            to_email,
+            full_name or "?",
+            (subject[:80] + "…") if len(subject) > 80 else subject,
+        )
+
         send_result = send_email(to_email, subject, body)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         if send_result["success"]:
             db.table("outreach_emails").update({
@@ -920,16 +971,137 @@ async def send_single_email(email_id: str):
                 "sent_at": datetime.now(timezone.utc).isoformat(),
                 "smtp_response": send_result["message"],
             }).eq("id", email_id).execute()
-            return {"message": "Email sent successfully", "success": True}
-        else:
+            log.info(
+                "send_single.worker_success | email_id=%s to=%s elapsed_ms=%.0f smtp=%s",
+                email_id,
+                to_email,
+                elapsed_ms,
+                send_result.get("message", ""),
+            )
+            return {"ok": True, "success": True, "message": send_result["message"]}
+
+        db.table("outreach_emails").update({
+            "smtp_response": send_result["message"],
+        }).eq("id", email_id).execute()
+        log.warning(
+            "send_single.worker_smtp_failed | email_id=%s to=%s elapsed_ms=%.0f detail=%s",
+            email_id,
+            to_email,
+            elapsed_ms,
+            send_result.get("message", ""),
+        )
+        return {"ok": False, "success": False, "message": send_result["message"]}
+
+    except Exception as e:
+        log.exception(
+            "send_single.worker_exception | email_id=%s elapsed_ms=%.0f",
+            email_id,
+            (time.perf_counter() - t0) * 1000,
+        )
+        try:
+            db = get_db()
             db.table("outreach_emails").update({
-                "smtp_response": send_result["message"],
+                "smtp_response": f"Server error: {str(e)[:500]}",
             }).eq("id", email_id).execute()
-            return {"message": send_result["message"], "success": False}
+        except Exception:
+            log.exception("send_single.db_update_failed | email_id=%s", email_id)
+        return {"ok": False, "success": False, "message": str(e)}
+
+
+@app.post("/outreach/send-single/{email_id}", tags=["Outreach"])
+async def send_single_email(
+    email_id: str,
+    background_tasks: BackgroundTasks,
+    wait: bool = Query(
+        False,
+        description=(
+            "If false (default), SMTP runs after the HTTP response — avoids gateway timeouts on Render. "
+            "Poll GET /outreach/emails or refresh the UI. If true, block until send completes (may timeout)."
+        ),
+    ),
+):
+    """
+    Send a specific approved email via SMTP.
+
+    Default **queued** mode returns immediately so proxies (Render ~30s, browsers, Vercel) do not time out
+    while Gmail/SMTP connects. Use `?wait=true` only for local debugging.
+    """
+    try:
+        from email_sender import is_configured
+
+        log.info("send_single.http_request | email_id=%s wait=%s", email_id, wait)
+
+        if not is_configured():
+            log.warning("send_single.http_reject | email_id=%s reason=smtp_not_configured", email_id)
+            raise HTTPException(
+                status_code=400,
+                detail="SMTP not configured.",
+            )
+
+        db = get_db()
+        result = db.table("outreach_emails").select(
+            "*, outreach_contacts(full_name, email)"
+        ).eq("id", email_id).execute()
+
+        if not result.data:
+            log.warning("send_single.http_reject | email_id=%s reason=not_found", email_id)
+            raise HTTPException(status_code=404, detail="Email not found")
+
+        email_row = result.data[0]
+        if email_row["status"] == "sent":
+            log.info("send_single.http_skip | email_id=%s reason=already_sent", email_id)
+            return {"message": "Email already sent", "success": True, "queued": False}
+
+        if email_row["status"] != "approved":
+            log.warning(
+                "send_single.http_reject | email_id=%s reason=not_approved status=%s",
+                email_id,
+                email_row.get("status"),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Email must be approved before sending.",
+            )
+
+        contact = email_row.get("outreach_contacts", {}) or {}
+        if not contact.get("email"):
+            log.warning("send_single.http_reject | email_id=%s reason=missing_contact_email", email_id)
+            raise HTTPException(status_code=400, detail="Contact email is missing")
+
+        if not wait:
+            background_tasks.add_task(_run_send_single_email, email_id)
+            log.info("send_single.http_queued | email_id=%s to=%s", email_id, contact.get("email", ""))
+            return {
+                "success": True,
+                "queued": True,
+                "email_id": email_id,
+                "message": (
+                    "Send started in the background. Wait a few seconds and refresh — "
+                    "status will change to sent, or check smtp_response if it failed."
+                ),
+            }
+
+        # Blocking path (local / short SMTP only)
+        log.info("send_single.http_blocking | email_id=%s", email_id)
+        out = await asyncio.to_thread(_run_send_single_email, email_id)
+        if out.get("error") == "not_found":
+            raise HTTPException(status_code=404, detail="Email not found")
+        if out.get("already_sent"):
+            return {"message": out["message"], "success": True, "queued": False}
+        if not out.get("ok"):
+            log.warning(
+                "send_single.http_done | email_id=%s success=false message=%s",
+                email_id,
+                out.get("message", ""),
+            )
+            return {"message": out.get("message", "Send failed"), "success": False, "queued": False}
+        log.info("send_single.http_done | email_id=%s success=true", email_id)
+        return {"message": out.get("message", "Email sent successfully"), "success": True, "queued": False}
 
     except HTTPException:
         raise
     except Exception as e:
+        log.exception("send_single.http_error | email_id=%s", email_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -946,6 +1118,7 @@ async def send_approved_emails():
         from datetime import datetime, timezone
 
         if not is_configured():
+            log.warning("send_batch.http_reject | reason=smtp_not_configured")
             raise HTTPException(
                 status_code=400,
                 detail="SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL in .env"
@@ -958,16 +1131,20 @@ async def send_approved_emails():
 
         emails = result.data or []
         if not emails:
+            log.info("send_batch.skip | reason=no_approved_emails")
             return {"message": "No approved emails to send", "sent": 0, "failed": 0}
 
+        log.info("send_batch.start | approved_count=%s", len(emails))
         sent = 0
         failed = 0
 
         for email_row in emails:
+            eid = email_row["id"]
             contact = email_row.get("outreach_contacts", {}) or {}
             to_email = contact.get("email", "")
 
             if not to_email:
+                log.warning("send_batch.skip_row | email_id=%s reason=no_recipient", eid)
                 failed += 1
                 continue
 
@@ -982,14 +1159,22 @@ async def send_approved_emails():
                     "status": "sent",
                     "sent_at": datetime.now(timezone.utc).isoformat(),
                     "smtp_response": send_result["message"],
-                }).eq("id", email_row["id"]).execute()
+                }).eq("id", eid).execute()
                 sent += 1
+                log.info("send_batch.row_ok | email_id=%s to=%s", eid, to_email)
             else:
                 db.table("outreach_emails").update({
                     "smtp_response": send_result["message"],
-                }).eq("id", email_row["id"]).execute()
+                }).eq("id", eid).execute()
                 failed += 1
+                log.warning(
+                    "send_batch.row_fail | email_id=%s to=%s detail=%s",
+                    eid,
+                    to_email,
+                    send_result.get("message", ""),
+                )
 
+        log.info("send_batch.complete | sent=%s failed=%s", sent, failed)
         return {
             "message": f"Sent {sent} emails, {failed} failed",
             "sent": sent,
@@ -999,6 +1184,7 @@ async def send_approved_emails():
     except HTTPException:
         raise
     except Exception as e:
+        log.exception("send_batch.error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
