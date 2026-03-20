@@ -19,6 +19,14 @@ class _UtcFormatter(logging.Formatter):
     converter = time.gmtime
 
 
+class _FlushingStreamHandler(logging.StreamHandler):
+    """Flush after each record so Render / Docker show lines immediately."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 def configure_app_logging() -> None:
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, None)
@@ -27,7 +35,7 @@ def configure_app_logging() -> None:
 
     fmt = "%(asctime)s | %(levelname)-5s | %(name)s | %(message)s"
     datefmt = "%Y-%m-%dT%H:%M:%SZ"
-    handler = logging.StreamHandler(sys.stdout)
+    handler = _FlushingStreamHandler(sys.stdout)
     handler.setFormatter(_UtcFormatter(fmt, datefmt))
 
     root = logging.getLogger()

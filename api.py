@@ -29,7 +29,7 @@ Docs:  http://localhost:8000/docs
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from typing import Optional
 import os
 import sys
@@ -111,6 +111,27 @@ def supabase_range(page: int, page_size: int):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Health ────────────────────────────────────────────────────────────────────
+@app.get("/", tags=["System"])
+async def root():
+    """
+    Render and browsers often probe GET / ; /health is the detailed probe.
+    """
+    return JSONResponse(
+        {
+            "service": "leadgen-api",
+            "ok": True,
+            "health": "/health",
+            "docs": "/docs",
+        }
+    )
+
+
+@app.head("/", tags=["System"])
+async def root_head():
+    """HEAD / — avoids 404 on uptime checks that use HEAD."""
+    return Response(status_code=200)
+
+
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "version": "1.0.0"}
@@ -1029,6 +1050,7 @@ async def send_single_email(
     try:
         from email_sender import is_configured
 
+        _t_http = time.perf_counter()
         log.info("send_single.http_request | email_id=%s wait=%s", email_id, wait)
 
         if not is_configured():
@@ -1042,6 +1064,13 @@ async def send_single_email(
         result = db.table("outreach_emails").select(
             "*, outreach_contacts(full_name, email)"
         ).eq("id", email_id).execute()
+
+        log.info(
+            "send_single.http_row_loaded | email_id=%s elapsed_ms=%.0f rows=%s",
+            email_id,
+            (time.perf_counter() - _t_http) * 1000,
+            len(result.data or []),
+        )
 
         if not result.data:
             log.warning("send_single.http_reject | email_id=%s reason=not_found", email_id)

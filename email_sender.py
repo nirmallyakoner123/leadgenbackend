@@ -69,7 +69,7 @@ def send_email(to_email: str, subject: str, body: str,
     use_ssl = SMTP_USE_SSL or SMTP_PORT == 465
     t0 = time.perf_counter()
     log.info(
-        "smtp_connect | host=%s port=%s ssl=%s timeout_s=%s to=%s subject_len=%s",
+        "smtp_begin | host=%s port=%s ssl=%s timeout_s=%s to=%s subject_len=%s",
         SMTP_HOST,
         SMTP_PORT,
         use_ssl,
@@ -101,18 +101,30 @@ def send_email(to_email: str, subject: str, body: str,
         msg.attach(MIMEText(html_content, "html", "utf-8"))
 
         # Connect and send (SSL for 465, STARTTLS for 587)
+        # TCP + SMTP EHLO happen inside the constructor — may block up to SMTP_TIMEOUT seconds.
         if SMTP_USE_SSL or SMTP_PORT == 465:
             server_ctx = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
         else:
             server_ctx = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+
+        log.info(
+            "smtp_tcp_ehlo_ok | host=%s port=%s to=%s elapsed_ms=%.0f",
+            SMTP_HOST,
+            SMTP_PORT,
+            to_email,
+            (time.perf_counter() - t0) * 1000,
+        )
 
         with server_ctx as server:
             if SMTP_DEBUG:
                 server.set_debuglevel(1)
             if not (SMTP_USE_SSL or SMTP_PORT == 465):
                 server.starttls()
+                log.info("smtp_starttls_ok | to=%s", to_email)
             server.login(SMTP_USER, SMTP_PASSWORD)
+            log.info("smtp_login_ok | to=%s", to_email)
             server.send_message(msg)
+            log.info("smtp_message_accepted | to=%s", to_email)
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         log.info(
