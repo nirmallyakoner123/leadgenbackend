@@ -8,9 +8,29 @@ The PDF deck you shared is **image-based** (no text layer), so it could not be a
 2. Paste the best sections below under **Deck excerpts**.
 3. Update `PRODUCT_CONTEXT` in `email_drafter.py` to match your exact wording (positioning, differentiators, compliance lines).
 
-## Deck excerpts (paste from PDF)
+## Deck excerpts (confirmed from slides)
 
-_Paste bullet points, taglines, and “problem / solution / how it works” from your deck here._
+**Slide — hero**
+- Headline: THE ENTIRE HIRING PROCESS **AUTOMATED**
+- Pay only for what you use — **$0.005/resume**, **$0.15/min**
+- Choose your AI model
+- No contracts. Start for free.
+- CTA: interviewscreener.com
+
+**Slide — full pipeline**
+1. Describe the role  
+2. AI creates interview questions  
+3. Share on portals & social media  
+4. Upload resumes → AI filters & ranks  
+5. Share interview link in 1 click  
+6. Candidate joins → AI interviews  
+7. AI scores & ranks  
+8. AI builds full candidate profile  
+9. **YOU make the final hire**
+
+_Add any extra deck copy below._
+
+_Paste additional bullet points from PDF export here if needed._
 
 ---
 

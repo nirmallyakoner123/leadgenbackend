@@ -24,61 +24,67 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # If you export text from the product PDF/deck, paste the best lines into PRODUCT_CONTEXT_SOURCE.md
 # and mirror them here (keep this block the single source the prompt reads).
 PRODUCT_CONTEXT = """
-=== INTERVIEWSCREENER.COM — PRODUCT CONTEXT FOR OUTREACH (do not invent features not listed here) ===
+=== INTERVIEWSCREENER.COM — PRODUCT CONTEXT (official deck; do not invent features not listed here) ===
 
 BRAND & URL
 - Name: InterviewScreener.com
 - URL (always mention as plain text in email body): InterviewScreener.com
-- Category: AI-assisted, async candidate screening (audio-first interviews + structured output for hiring teams)
+- Headline (marketing): the heavy lift of the hiring process automated — you still make the final hire.
 
-ONE-LINE POSITIONING
-- Let candidates complete a structured, role-relevant screening conversation by voice, on their own time; hiring teams get consistent summaries before live interviews.
+CORE POSITIONING — FULL PIPELINE (do NOT shrink the story to "phone screens" or "first round only")
+- One product spans: role definition → AI-generated interview questions → share to portals/social → resume upload → AI filter/rank → one-click interview link → candidate joins → AI-led interview → AI score/rank → full candidate profile → your team makes the final hire.
+
+THE FULL PIPELINE (9 steps — never list all in one email; at most hint at 2–3 adjacent stages OR say "end-to-end pipeline" once)
+1. Describe the role
+2. AI creates interview questions
+3. Share on portals & social media
+4. Upload resumes → AI filters & ranks
+5. Share interview link in one click
+6. Candidate joins → AI interviews
+7. AI scores & ranks
+8. AI builds full candidate profile
+9. You make the final hire
+
+COMMERCIAL (optional one short clause in email — exact figures only)
+- Pay as you go: $0.005 per resume, $0.15 per minute.
+- Choose your AI model.
+- No contracts; start free.
 
 WHO USES IT
-- Primary: Talent acquisition, recruiters, HR / people ops running high-volume or multi-role hiring.
-- Secondary: Hiring managers who want a fair first pass without burning calendar on every applicant.
-- Candidates: Self-serve async interview (no live scheduling for the screening step).
+- TA, recruiters, HR/people ops, hiring managers with many reqs, high resume volume, or tools fragmented across hiring stages.
 
-HOW IT WORKS (4 steps — use at most ONE short phrase from this in an email; never list all four)
-1. Hiring team adds / defines the job in the product.
-2. System generates relevant, job-specific interview questions (not a one-size-fits-all form).
-3. Candidate completes an AI-guided audio interview asynchronously.
-4. Team receives structured summaries to compare candidates and decide who moves forward.
+PROBLEMS TO MENTION (pick ONE — prefer pipeline-wide, not only calendar/phone)
+- Resume volume and manual triage before qualified people surface.
+- Posting the same role everywhere without a single flow through interviews and scoring.
+- Gap between applicants and structured interviews + comparable scores/profiles.
+- Hard to compare candidates fairly end-to-end.
+- Many open roles → operational load scales faster than headcount.
 
-PROBLEMS IT ADDRESSES (pick ONE pain that best matches the lead — do not stack)
-- Early phone screens and intro calls consume huge calendar time across many applicants.
-- Hard to keep first-round evaluation consistent across interviewers and time zones.
-- Scheduling back-and-forth and no-shows slow the funnel.
-- Notes and impressions vary by person; hard to compare candidates fairly on the same bar.
-- Teams with many open roles struggle to give every applicant a timely first touch.
+OUTCOMES (pick ONE)
+- One flow from role to ranked, profiled candidates; you decide who to hire.
+- Less manual work per applicant across resume handling, interviews, and scoring.
+- Structured AI interviews plus scores and profiles without rebuilding the stack in five tools.
 
-OUTCOMES & BENEFITS (pick ONE; no fabricated metrics)
-- Frees live interview time for candidates who already cleared a structured screen.
-- Same question set and format for every candidate = easier comparison.
-- Candidates progress without waiting for a recruiter slot.
-- Hiring team reviews written/audio-derived summaries instead of relying on memory.
-- Scales better when applicant volume or role count goes up.
+DIFFERENTIATORS (at most one per email)
+- Full hiring pipeline vs a point fix sold only as "replace phone screens".
+- Model choice + usage pricing + no contract.
 
-DIFFERENTIATORS (mention at most one in a single sentence)
-- Audio / voice screening (not only text forms or chatbots).
-- Questions tied to the specific job, not generic screening templates.
-- Async by design — built for volume and scheduling friction, not replacing final human interviews.
-- Output is structured for hiring decisions (summaries), not just a recording dump.
+FRAMING RULES (critical)
+- DO: hiring pipeline automation, resume-to-profile, AI interviews as part of the flow, final hire stays human.
+- DO NOT: frame the product as ONLY first-round screens, ONLY phone-call reduction, or ONLY scheduling — too narrow vs the deck.
+- OK to mention AI audio interviews as one strong piece — always in context of the broader pipeline.
 
-WHAT THIS IS NOT (avoid implying these in cold email)
-- Not a replacement for full final-round or culture-fit interviews with the team.
-- Not a promise to "automate hiring end-to-end" or remove human judgment.
-- Do not claim legal compliance, bias elimination, or guaranteed hire quality.
+WHAT THIS IS NOT
+- Does not remove your final hiring decision (deck: you make the final hire).
+- No legal/compliance/bias/guarantee claims.
 
-VOICE & CLAIMS FOR EMAILS
-- Tone: practical, peer-level, recruiting ops — not hype, not "AI revolution" language.
-- Forbidden words/phrases in the email: revolutionary, game-changer, cutting-edge, guaranteed, 10x, replace your recruiters.
-- Do not cite percentages, customer counts, or ROI unless provided in lead data — never invent.
+VOICE & FORBIDDEN WORDS
+- Tone: sharp operator / founder, not sales hype.
+- Forbidden: game-changer, revolutionary, cutting-edge, 10x, guaranteed, "runs hiring with zero humans".
 
-OPTIONAL PHRASES (paraphrase; do not use more than one)
-- "Structured audio screen before you block calendar."
-- "Same bar for every candidate on the first pass."
-- "They interview when it works for them; you get summaries when it works for you."
+OPTIONAL ONE-LINERS (paraphrase; max one)
+- "From job description to ranked profiles — your call on the final hire."
+- "Resumes filtered, candidates interviewed by AI, scored and profiled — usage-based ($0.005/resume, $0.15/min), no contract."
 """
 
 
@@ -154,21 +160,22 @@ STRICT RULES:
 1. Subject line: 4-7 words. Specific, curiosity-driven, not salesy. Avoid "Quick question", "Following up", or generic phrases. Make it feel like it was written just for them.
 2. Body length: 60 to 90 words ONLY. Every word must earn its place.
 3. Opening line: Use the outreach_opener or a specific observation about their company/hiring situation. It must feel like you actually looked them up — NOT like a template. Do NOT start with "I noticed you're hiring" or "With X open roles". Be more specific and human.
-4. Pain point: Name one concrete friction that hiring teams at this scale actually feel (e.g., "phone screens eating up your week", "inconsistent feedback across interviewers", "candidates ghosting after scheduling"). Pick the most relevant one — do not list multiple.
-5. Product mention: Introduce InterviewScreener.com in ONE natural sentence. Include the URL as plain text. Do NOT use marketing language like "cutting-edge" or "revolutionary".
-6. Social proof (optional but preferred): Add a brief implied proof if it fits naturally (e.g., "teams hiring at this pace often...", "a few recruiting leads we work with..."). Keep it subtle — no fake stats.
-7. CTA: End with ONE specific, low-friction yes/no question that invites a real answer. Examples: "Is async screening something your team has explored?", "Would it be worth a 10-minute look?", "Open to seeing how it works?". Vary the CTA — do NOT always use "Does this align with your current priorities?".
-8. Tone: Peer-to-peer. Confident but not pushy. Casual but professional. No hyperbole, no filler phrases ("Hope you're well", "I wanted to reach out").
+4. Pain point: Name ONE concrete friction aligned with the FULL PIPELINE story — e.g. resume triage at scale, fragmented tools across hiring stages, hard to compare candidates end-to-end, bottleneck between applicants and structured interviews/scores, ops load with many reqs. Do NOT default to "phone screens" or "first-round calls" as the only pain unless the opener already implies that specific bottleneck.
+5. Product mention: Introduce InterviewScreener.com in ONE natural sentence that reflects the PIPELINE (role → questions → distribution/resume handling → AI interview → scoring/profiles → they still make the final hire). You may briefly include AI interviews as part of that flow — not the sole value prop. Include the URL as plain text. Optional: one exact pricing clause ($0.005/resume, $0.15/min) OR "no contract / start free" — never invent other numbers.
+6. Social proof (optional): One subtle line max — no fake stats, no "game changer".
+7. CTA: End with ONE low-friction yes/no question. Prefer pipeline language over "phone screen" only, e.g. "Worth a quick look at the full flow?", "Open to seeing how the pipeline works?", "Does consolidating resume → interview → scores sound useful?". Vary the CTA.
+8. Tone: Peer-to-peer. Confident but not pushy. Casual but professional. No hyperbole, no filler ("Hope you're well", "I wanted to reach out").
 9. Greeting: Use first name only.
 10. Sign off: "Best,\\nNirmallya"
 11. Output valid JSON only.
 
 WHAT MAKES THIS EMAIL FAIL (avoid at all costs):
+- Positioning InterviewScreener as ONLY replacing phone screens or ONLY first-round scheduling (too narrow vs product)
 - Generic opener that could apply to any company
-- Listing features instead of naming a pain
-- Weak, vague CTA that's easy to ignore
-- Sounding like a SaaS sales template
-- Exaggerating claims or using buzzwords
+- Feature dumping instead of one sharp pain
+- Weak, vague CTA
+- SaaS-template voice; buzzwords (including "game changer")
+- Exaggerating beyond the PRODUCT_CONTEXT (e.g. zero human involvement in hiring)
 
 Return exactly:
 {{
@@ -214,13 +221,14 @@ Return exactly:
         # Fallback template — specific enough to not feel generic
         roles_hint = f"with {open_roles_count} roles open" if open_roles_count else "while scaling the team"
         return {
-            "subject": f"Candidate screening at {company_name}",
+            "subject": f"Hiring pipeline at {company_name}",
             "body": (
                 f"Hi {contact_name},\n\n"
-                f"Recruiting teams {roles_hint} often tell us that phone screens alone eat up more time than the actual hiring decision. "
-                f"We built InterviewScreener.com so candidates complete an AI-guided audio interview async — "
-                f"your team gets structured summaries and a consistent baseline before committing to live rounds.\n\n"
-                f"Is async screening something {company_name} has looked into?\n\n"
+                f"Teams {roles_hint} often get crushed by the whole funnel — resume triage, getting people into structured interviews, "
+                f"and ending up with comparable scores and profiles before anyone makes a final call.\n\n"
+                f"InterviewScreener.com runs that end-to-end flow (role → questions → resumes filtered/ranked → AI interviews → scoring and full candidate profiles). "
+                f"You still make the final hire. Usage-based ($0.005/resume, $0.15/min), no contract.\n\n"
+                f"Open to a quick look at how the pipeline fits your team?\n\n"
                 f"Best,\nNirmallya"
             ),
         }
