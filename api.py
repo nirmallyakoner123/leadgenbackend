@@ -27,6 +27,7 @@ Docs:  http://localhost:8000/docs
 """
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from typing import Optional
@@ -56,6 +57,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class ApolloPasteRequest(BaseModel):
+    raw_text: str
+    company_name: str
 
 # ─── Standard paginated response envelope ────────────────────────────────────
 def paged(data: list, total: int, page: int, page_size: int) -> dict:
@@ -870,6 +875,66 @@ async def update_email(email_id: str, body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Send Single Approved Email ────────────────────────────────────────────────
+@app.post("/outreach/send-single/{email_id}", tags=["Outreach"])
+async def send_single_email(email_id: str):
+    """
+    Send a specific approved email via SMTP.
+    """
+    try:
+        db = get_db()
+        from email_sender import send_email, is_configured
+        from datetime import datetime, timezone
+
+        if not is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="SMTP not configured."
+            )
+
+        # Fetch the email with contact info
+        result = db.table("outreach_emails").select(
+            "*, outreach_contacts(full_name, email)"
+        ).eq("id", email_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        email_row = result.data[0]
+        if email_row["status"] == "sent":
+            return {"message": "Email already sent", "success": True}
+
+        contact = email_row.get("outreach_contacts", {}) or {}
+        to_email = contact.get("email", "")
+
+        if not to_email:
+            raise HTTPException(status_code=400, detail="Contact email is missing")
+
+        # Use edited version if available, otherwise original
+        subject = email_row.get("edited_subject") or email_row.get("subject", "")
+        body = email_row.get("edited_body") or email_row.get("body", "")
+
+        send_result = send_email(to_email, subject, body)
+
+        if send_result["success"]:
+            db.table("outreach_emails").update({
+                "status": "sent",
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "smtp_response": send_result["message"],
+            }).eq("id", email_id).execute()
+            return {"message": "Email sent successfully", "success": True}
+        else:
+            db.table("outreach_emails").update({
+                "smtp_response": send_result["message"],
+            }).eq("id", email_id).execute()
+            return {"message": send_result["message"], "success": False}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Send Approved Emails ──────────────────────────────────────────────────────
 @app.post("/outreach/send", tags=["Outreach"])
 async def send_approved_emails():
@@ -937,6 +1002,80 @@ async def send_approved_emails():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Parse Apollo Raw Text ─────────────────────────────────────────────────────
+@app.post("/outreach/parse-apollo", tags=["Outreach"])
+async def parse_apollo(req: ApolloPasteRequest):
+    """
+    Takes raw pasted text from Apollo UI, parses out contacts (name, title, location),
+    and uses OpenAI to identify the best decision makers to target for InterviewScreener.com.
+    """
+    try:
+        from openai import OpenAI
+        import os
+        import json
+        
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        prompt = f"""
+We have a raw list of contacts copied from Apollo.io for the company: {req.company_name}.
+Our product is InterviewScreener.com (an AI-powered candidate screening platform replacing first-round phone screens). 
+Our target buyers are Founders, CEOs, VP of HR, Head of Talent Acquisition, HR Directors, and Recruiters.
+
+Here is the raw text:
+{req.raw_text}
+
+Task:
+1. Parse the text to find all individuals. Apollo format usually shows:
+   Name
+   Job Title
+   (Empty line or company name)
+   Access email / Access Mobile / Click to run
+   Location
+   Employees
+   Industry
+   Connections
+2. For each parsed individual, extract:
+   - full_name
+   - title
+   - location
+3. Evaluate if they are a good target for our product (Target buyers are TA, HR, Founders, C-Suite).
+   - "is_target": true if they are a strong buyer persona, false otherwise.
+   - "ai_reasoning": 1 short concise sentence explaining why.
+
+Return ONLY a JSON array of objects. Make sure the JSON is valid.
+Example:
+[
+  {{
+    "full_name": "Alfredo O.",
+    "title": "Account Executive",
+    "location": "Chicago, Illinois",
+    "is_target": false,
+    "ai_reasoning": "Account executives are not the buyer for recruiting software."
+  }}
+]
+"""
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=2000,
+        )
+        
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        
+        contacts = json.loads(raw)
+        return {"contacts": contacts, "success": True}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ── Outreach Stats ────────────────────────────────────────────────────────────
