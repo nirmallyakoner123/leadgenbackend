@@ -22,22 +22,12 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 PRODUCT_CONTEXT = """
 PRODUCT: InterviewScreener.com
-WHAT: AI-powered candidate screening platform. Recruiters create a job, AI generates
-screening questions from the JD, candidates attend async AI video interviews,
-recruiters get ranked analysis with AI-scored summaries. Reduces screening time by 80%.
-
-PRICING:
-- Starter: $49.99/month (~300 candidates) — perfect for small teams
-- Pro: $99.99/month (~1000 candidates) — most popular
-- Scale: $299.99/month (~2200 candidates)
-- Enterprise: $999.99/month (~5500 candidates)
+WHAT: AI-assisted candidate screening tool. Recruiters add a job, the system generates relevant questions, and candidates interview with an AI agent using audio. The hiring team gets structured summaries.
 
 KEY VALUE PROPS:
-1. Eliminates first-round phone screens entirely
-2. Candidates complete screening interviews on their own time (async)
-3. AI ranks and scores every candidate automatically
-4. Structured evaluation — consistent, bias-free screening
-5. Integrates with any ATS via webhooks
+1. Streamlines candidate screening with AI-guided audio interviews.
+2. Candidates interview on their own schedule (async).
+3. Hiring teams get a consistent evaluation baseline.
 """
 
 
@@ -54,97 +44,72 @@ def draft_email(contact: dict, company_data: dict, ai_data: dict) -> dict:
         dict with subject, body
     """
     company_name = company_data.get("name_display", "your company")
-    contact_name = contact.get("first_name") or contact.get("full_name", "").split()[0] if contact.get("full_name") else "there"
+    contact_name = contact.get("first_name")
+    if not contact_name and contact.get("full_name"):
+        contact_name = contact.get("full_name").split()[0]
+    if not contact_name:
+        contact_name = "there"
+    
     contact_title = contact.get("title", "")
     
-    # Build signal summary
-    signals = ai_data.get("signal_results", [])
-    signal_text = "\n".join([
-        f"  - {s.get('signal_id', '')}: {'✅ PASS' if s.get('passed') else '❌ FAIL'} — {s.get('evidence', '')[:100]}"
-        for s in signals
-    ]) if signals else "No signal data available"
+    # Extract only the SINGLE BEST positive signal evidence to keep context extremely sharp
+    passed_signals = [s for s in ai_data.get("signal_results", []) if s.get("passed")]
+    if passed_signals:
+        best_signal = passed_signals[0]
+        signal_text = f"Strong indicator: {best_signal.get('evidence', '')[:150]}"
+    else:
+        signal_text = "No specific positive signals found. Rely on general company context."
     
-    why_fit = ai_data.get("why_they_fit", "")
-    opener = ai_data.get("outreach_opener", "")
-    plan = ai_data.get("recommended_plan", "Pro")
-    score = ai_data.get("final_score", 0)
     
     open_roles_count = ai_data.get("open_roles_count", 0)
     open_roles_titles = ai_data.get("open_roles_titles", [])
-    open_roles_text = f"{open_roles_count} roles (e.g. {', '.join(open_roles_titles[:3])})" if open_roles_count else "Unknown"
+    open_roles_text = f"{open_roles_count} roles (e.g. {', '.join(open_roles_titles[:3])})" if open_roles_count else ""
     
+    # Only include hiring observation if we have actual open roles data
+    hiring_observation_rule = (
+        "- Start with a natural observation about their hiring volume."
+        if open_roles_count
+        else "- Start with a brief, relevant observation about their company or industry. Do NOT assume they are actively hiring."
+    )
+
     prompt = f"""
-You are a world-class B2B cold email copywriter for InterviewScreener.com.
+You are a highly adaptable B2B cold email copywriter.
 
 {PRODUCT_CONTEXT}
 
-═══════════════════════════════════════════════
-RECIPIENT
-═══════════════════════════════════════════════
-Name: {contact.get('full_name', 'there')}
+RECIPIENT & COMPANY
+Name: {contact_name}
 Title: {contact_title}
 Company: {company_name}
-Seniority: {contact.get('seniority', 'unknown')}
-
-═══════════════════════════════════════════════
-COMPANY INTELLIGENCE (from our pipeline)
-═══════════════════════════════════════════════
-Website: {company_data.get('website', 'N/A')}
-Description: {company_data.get('description', 'N/A')[:300]}
-Team Size: {company_data.get('team_size', 'Unknown')} employees
-Industries: {', '.join(company_data.get('industries', [])) or 'Unknown'}
-Country: {company_data.get('country_code', 'Unknown')}
+Team Size: {company_data.get('team_size', 'Unknown')}
+Open Roles: {open_roles_text or 'Unknown'}
 Funding: {company_data.get('funding_amount', 'Unknown')}
-Open Roles: {open_roles_text}
-Lead Score: {score}/18
 
-═══════════════════════════════════════════════
-SIGNALS (why they're a fit)
-═══════════════════════════════════════════════
+RELEVANT SIGNALS
 {signal_text}
 
-AI Analysis: {why_fit[:300] if why_fit else 'N/A'}
-Suggested Opener: {opener[:200] if opener else 'N/A'}
-Recommended Plan: {plan}
+TASK
+Write a natural, credible cold email to {contact_name}.
 
-═══════════════════════════════════════════════
-YOUR TASK
-═══════════════════════════════════════════════
+Rules:
+- Subject line: max 7 words, specific, non-catchy/non-salesy
+- Body length: 50 to 100 words (extremely concise)
+- Use 1 strong personalization point, or 2 if they naturally flow together (make it sound human, not AI-researched).
+{hiring_observation_rule}
+- Softly highlight the usual friction in candidate screening (do not exaggerate).
+- Introduce InterviewScreener.com naturally (simply include the URL "InterviewScreener.com" in the text).
+- Mention 1-2 practical benefits (e.g., async interviews, structured tech summaries) without absolute claims.
+- 1 CTA only: Ask a low-friction question to gauge interest (e.g., "Open to exploring how?", "Worth a quick chat?", or "Does this align with your current priorities?"). Do NOT always ask for a 15-minute demo.
+- Tone: peer-to-peer, credible, casual. No hyperbole.
+- No filler ("Hope you are well").
+- Greeting must use first name.
+- Sign off as Nirmallya.
+- Output valid JSON only with keys: subject, body.
 
-Write a cold email that will make {contact_name} want to reply. Follow these rules:
-
-SUBJECT LINE:
-- Max 8 words
-- Must reference something SPECIFIC about their company (a role they're hiring, their team size, their industry)
-- NO generic subjects like "Quick question" or "Thought of you"
-- Good examples: "Screening {company_name}'s 12 open roles faster" or "{contact_name}, your TA team's new superpower"
-
-BODY:
-- Max 5 sentences total (SHORT)
-- Sentence 1: Observation — cite a SPECIFIC fact (e.g., "I noticed {company_name} has 8 open engineering roles on Greenhouse")
-- Sentence 2: Pain point — connect it to a real pain (e.g., "With a team of ~60, that's likely 1-2 recruiters handling 20+ screening calls per week")
-- Sentence 3: Solution — explain what InterviewScreener does in ONE line
-- Sentence 4: Social proof or specific benefit — mention the {plan} plan or a concrete time saving
-- Sentence 5: CTA — Low-commitment ask (e.g., "Would a 15-minute demo make sense?")
-
-TONE:
-- Conversational, like a peer-to-peer recommendation
-- NOT salesy, NOT corporate, NOT pushy
-- Reference their actual title ({contact_title}) naturally if appropriate
-- If they're a Founder/CEO, adjust tone to be more strategic/ROI-focused
-- If they're HR/TA, focus on daily pain relief
-
-IMPORTANT:
-- Do NOT use "Hope this finds you well" or any filler
-- Do NOT use exclamation marks
-- Do NOT use words like "revolutionary" or "game-changing"
-- DO use their first name ({contact_name}) in the greeting
-- DO sign off as "Nirmallya" (the sender's name)
-
-Respond ONLY in this JSON format:
+Return exactly:
 {{
-  "subject": "Your subject line here",
-  "body": "Hi {contact_name},\\n\\nYour email body here.\\n\\nBest,\\nNirmallya\\nInterviewScreener.com"
+  "subject": "...",
+  "body": "Hi {contact_name},\\n\\nYour email body here.\\n\\nBest,\\nNirmallya"
 }}
 """
 
@@ -152,38 +117,45 @@ Respond ONLY in this JSON format:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            temperature=0.4,
             max_tokens=500,
+            response_format={"type": "json_object"}
         )
         raw = response.choices[0].message.content.strip()
 
-        # Clean up markdown code block if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
         result = json.loads(raw)
+        subject_text = result.get("subject", "").strip()
+        body_text = result.get("body", "").strip()
+
+        # Output Validation
+        word_count = len(body_text.split())
+        if word_count < 20 or word_count > 150:
+            raise ValueError(f"Body length ({word_count} words) out of bounds.")
+        if len(subject_text.split()) > 10:
+            raise ValueError("Subject line too long.")
+        if "InterviewScreener.com" not in body_text:
+            raise ValueError("Missing product URL.")
+        if "Nirmallya" not in body_text:
+            raise ValueError("Missing sign-off.")
+        if contact_name != "there" and contact_name.lower() not in body_text.lower():
+            raise ValueError("Missing contact name in body.")
+
         return {
-            "subject": result.get("subject", f"Quick note for {contact_name}"),
-            "body": result.get("body", ""),
+            "subject": subject_text or f"Quick note for {contact_name}",
+            "body": body_text,
         }
 
     except Exception as e:
-        print(f"  [Email Drafter] Error drafting for {contact.get('full_name', '?')}: {e}")
-        # Fallback template
+        print(f"  [Email Drafter] Validation/generation failed for {contact.get('full_name', '?')}: {e}")
+        # Top-tier Fallback template (no longer sounds like a standard SaaS template)
         return {
-            "subject": f"Screening {company_name}'s open roles faster",
+            "subject": f"Question about {company_name}'s screening process",
             "body": (
                 f"Hi {contact_name},\n\n"
-                f"I came across {company_name} and noticed you're actively hiring. "
-                f"With {company_data.get('team_size', 'your')} employees "
-                f"and multiple open roles, your team is probably spending significant time on first-round screens.\n\n"
-                f"InterviewScreener.com automates that entirely — candidates complete AI-powered screening interviews "
-                f"on their own time, and you get ranked results with AI analysis.\n\n"
-                f"Would a quick 15-minute demo make sense this week?\n\n"
-                f"Best,\nNirmallya\nInterviewScreener.com"
+                f"I noticed {company_name} is growing, and I wanted to see how your team is handling candidate screening right now.\n\n"
+                f"Instead of scheduling endless intro calls, hiring teams use InterviewScreener.com to let candidates complete AI-guided audio interviews. You get a consistent evaluation baseline on your own schedule before committing to live interviews.\n\n"
+                f"Would it be helpful to see how other teams are doing this?\n\n"
+                f"Best,\nNirmallya"
             ),
         }
 
